@@ -1,0 +1,25 @@
+[project]
+name = "ComfyUI_RadioStation"
+version = "1.0.0"
+description = "Docked lofi radio player for ComfyUI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "SKBv0" }
+]
+keywords = ["comfyui", "radio", "lofi", "youtube", "frontend-extension"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/SKBv0/ComfyUI_RadioStation"
+"Bug Tracker" = "https://github.com/SKBv0/ComfyUI_RadioStation/issues"
+
+[tool.comfy]
+PublisherId = "SKBv0"
+DisplayName = "ComfyUI Radio Station"
