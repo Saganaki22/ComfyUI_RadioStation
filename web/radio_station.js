@@ -5,8 +5,9 @@ const EXTENSION_NAME = "ComfyUI.RadioStation";
 const STORAGE_KEY = "ComfyUI.RadioStation.v1";
 const YOUTUBE_API_SRC = "https://www.youtube.com/iframe_api";
 const STATIONS_ENDPOINT = "radiostation/lofi-live";
+const YOUTUBE_RESOLVE_ENDPOINT = "radiostation/youtube-video";
 const STYLESHEET_ID = "comfy-radio-station-style";
-const STYLESHEET_HREF = "/extensions/ComfyUI_RadioStation/css/radio_station.css?style=20260629";
+const STYLESHEET_HREF = new URL("./css/radio_station.css?style=20260630", import.meta.url).href;
 const DEFAULT_STATION_QUERY = "lofi live";
 const DEFAULT_VOLUME = 64;
 const MAX_STATIONS = 8;
@@ -67,6 +68,7 @@ let canvasToolbarObserver = null;
 let canvasToolbarRetryTimer = null;
 let canvasToolbarFrame = 0;
 let playbackToken = 0;
+let stationRefreshToken = 0;
 let stations = FALLBACK_STATIONS;
 let shell = null;
 let state = {
@@ -161,6 +163,25 @@ function saveState(nextState = state) {
     }
 }
 
+function isYoutubeUrl(url) {
+    const value = String(url || "").trim();
+    if (YOUTUBE_VIDEO_ID_PATTERN.test(value)) {
+        return true;
+    }
+
+    try {
+        const parsed = new URL(value);
+        const host = parsed.hostname.replace(/^www\./, "");
+        return host === "youtu.be" ||
+            host === "youtube.com" ||
+            host.endsWith(".youtube.com") ||
+            host === "youtube-nocookie.com" ||
+            host.endsWith(".youtube-nocookie.com");
+    } catch {
+        return false;
+    }
+}
+
 function parseYoutubeId(url) {
     const value = String(url || "").trim();
     if (YOUTUBE_VIDEO_ID_PATTERN.test(value)) {
@@ -191,6 +212,12 @@ function parseYoutubeId(url) {
 
 function normalizeYoutubeId(value) {
     return YOUTUBE_VIDEO_ID_PATTERN.test(String(value || "").trim()) ? String(value).trim() : "";
+}
+
+async function resolveYoutubeVideoId(url) {
+    const query = encodeURIComponent(String(url || "").trim());
+    const payload = await fetchComfyJson(`${YOUTUBE_RESOLVE_ENDPOINT}?url=${query}`, { cache: "no-store" });
+    return normalizeYoutubeId(payload.videoId);
 }
 
 function normalizeStation(station = {}, index = 0) {
@@ -328,8 +355,15 @@ function ensureYoutubeApi() {
 }
 
 function destroyYoutubePlayer() {
-    if (activePlayer?.destroy) {
-        activePlayer.destroy();
+    if (activePlayer) {
+        try {
+            activePlayer.stopVideo?.();
+        } catch (error) {
+            console.warn("[RadioStation] Failed to stop YouTube player", error);
+        }
+        if (activePlayer.destroy) {
+            activePlayer.destroy();
+        }
     }
     activePlayer = null;
     activePlayerHost?.remove();
@@ -344,6 +378,7 @@ function stopDirectAudio() {
     directAudio = null;
     audio.pause();
     audio.removeAttribute("src");
+    audio.load();
 }
 
 function nextPlaybackToken() {
@@ -355,12 +390,25 @@ function isActivePlaybackToken(token) {
     return token === playbackToken;
 }
 
+function nextStationRefreshToken() {
+    stationRefreshToken += 1;
+    return stationRefreshToken;
+}
+
+function invalidateStationRefreshes() {
+    stationRefreshToken += 1;
+}
+
+function isActiveStationRefreshToken(token) {
+    return token === stationRefreshToken;
+}
+
 function stopPlayback() {
     nextPlaybackToken();
     state.playing = false;
     state.playbackStatus = "paused";
-    activePlayer?.pauseVideo?.();
-    directAudio?.pause?.();
+    destroyYoutubePlayer();
+    stopDirectAudio();
 }
 
 function applyMute() {
@@ -496,7 +544,7 @@ function toggleVolumePanel() {
 
 async function playCurrent(options = {}) {
     const url = state.selectedUrl || FALLBACK_STATIONS[0].url;
-    const videoId = parseYoutubeId(url);
+    let videoId = parseYoutubeId(url);
     const token = nextPlaybackToken();
     state.playing = true;
     state.playbackStatus = "playing";
@@ -510,8 +558,15 @@ async function playCurrent(options = {}) {
     };
 
     try {
-        if (videoId) {
+        if (videoId || isYoutubeUrl(url)) {
             syncView();
+            videoId = videoId || await resolveYoutubeVideoId(url);
+            if (!isActivePlaybackToken(token) || !state.playing) {
+                return;
+            }
+            if (!videoId) {
+                throw new Error("Could not resolve YouTube URL");
+            }
             await playYoutube(videoId, state.volume, token);
         } else {
             await playDirect(url, state.volume, token);
@@ -558,6 +613,7 @@ function ensureSelectedStation() {
 }
 
 function syncStoredStations(nextStations) {
+    invalidateStationRefreshes();
     stations = dedupeStations(nextStations);
     state.customStations = stations;
     state.stationsEdited = true;
@@ -622,6 +678,7 @@ function addStation(url) {
         return false;
     }
     if (!hasStation(station.url)) {
+        invalidateStationRefreshes();
         stations = dedupeStations([...stations, station]);
         state.customStations = stations;
         state.stationsEdited = true;
@@ -946,6 +1003,7 @@ function escapeAttr(value) {
 }
 
 async function refreshStations() {
+    const refreshToken = nextStationRefreshToken();
     const wasPlaying = state.playing;
     if (state.stationsEdited && Array.isArray(state.customStations) && state.customStations.length) {
         stations = dedupeStations(state.customStations);
@@ -962,8 +1020,14 @@ async function refreshStations() {
     try {
         const query = encodeURIComponent(DEFAULT_STATION_QUERY);
         const payload = await fetchComfyJson(`${STATIONS_ENDPOINT}?q=${query}`, { cache: "no-store" });
+        if (!isActiveStationRefreshToken(refreshToken) || state.stationsEdited) {
+            return;
+        }
         stations = dedupeStations(payload.stations?.length ? payload.stations : FALLBACK_STATIONS);
     } catch (error) {
+        if (!isActiveStationRefreshToken(refreshToken) || state.stationsEdited) {
+            return;
+        }
         console.warn("[RadioStation] Using fallback station list", error);
         stations = dedupeStations(FALLBACK_STATIONS);
     }
