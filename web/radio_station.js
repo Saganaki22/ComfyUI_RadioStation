@@ -214,6 +214,22 @@ function normalizeYoutubeId(value) {
     return YOUTUBE_VIDEO_ID_PATTERN.test(String(value || "").trim()) ? String(value).trim() : "";
 }
 
+function isYoutubePlaylistOnlyUrl(url) {
+    const value = String(url || "").trim();
+    try {
+        const parsed = new URL(value);
+        const host = parsed.hostname.replace(/^www\./, "");
+        const isYoutubeHost = host === "youtube.com" || host.endsWith(".youtube.com");
+        const isNoCookieHost = host === "youtube-nocookie.com" || host.endsWith(".youtube-nocookie.com");
+        if (!isYoutubeHost && !isNoCookieHost && host !== "youtu.be") {
+            return false;
+        }
+        return Boolean(parsed.searchParams.get("list") && !parseYoutubeId(value));
+    } catch {
+        return false;
+    }
+}
+
 async function resolveYoutubeVideoId(url) {
     const query = encodeURIComponent(String(url || "").trim());
     const payload = await fetchComfyJson(`${YOUTUBE_RESOLVE_ENDPOINT}?url=${query}`, { cache: "no-store" });
@@ -223,6 +239,9 @@ async function resolveYoutubeVideoId(url) {
 function normalizeStation(station = {}, index = 0) {
     const source = station && typeof station === "object" ? station : {};
     const sourceUrl = String(source.url || "").trim();
+    if (isYoutubePlaylistOnlyUrl(sourceUrl)) {
+        return { title: "", channel: "", url: "", videoId: "", thumbnail: "", titleLocked: false };
+    }
     const videoId = normalizeYoutubeId(source.videoId) || parseYoutubeId(sourceUrl);
     const url = sourceUrl || (videoId ? `https://www.youtube.com/watch?v=${videoId}` : "");
     return {
@@ -470,7 +489,10 @@ async function playYoutube(videoId, volume, token) {
                 }
                 event.target.playVideo();
             },
-            onError: () => stopPlaybackAfterFailure(token),
+            onError: (event) => {
+                console.warn("[RadioStation] YouTube playback failed", event?.data);
+                stopPlaybackAfterFailure(token);
+            },
         },
     });
 }

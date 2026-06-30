@@ -211,6 +211,20 @@ def _video_id_from_youtube_url(value):
     return ""
 
 
+def _youtube_playlist_only_url(value):
+    url = str(value or "").strip()
+    if not url or _valid_video_id(url):
+        return False
+
+    parsed = urlparse(url)
+    if not parsed.scheme and not parsed.netloc:
+        parsed = urlparse(f"https://{url}")
+    if parsed.scheme not in {"http", "https"} or not _youtube_host(parsed.netloc):
+        return False
+
+    return bool(parse_qs(parsed.query).get("list") and not _video_id_from_youtube_url(url))
+
+
 def _video_id_from_html(html):
     for pattern in (
         r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\'][^"\']*watch\?v=([A-Za-z0-9_-]{11})',
@@ -227,6 +241,8 @@ def _resolve_youtube_video_id(value):
     direct_video_id = _video_id_from_youtube_url(value)
     if direct_video_id:
         return direct_video_id
+    if _youtube_playlist_only_url(value):
+        return ""
 
     url = _normalized_youtube_url(value)
     if not url:
